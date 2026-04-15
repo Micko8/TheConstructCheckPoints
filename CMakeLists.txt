@@ -155,6 +155,7 @@ add_executable(robot_info_node
 add_dependencies(robot_info_node robotinfo_msgs_generate_messages_cpp)
 
 add_executable(agv_robot_info_node
+  src/hydraulic_system_monitor.cpp
   src/agv_robot_info_main.cpp
   src/agv_robot_info_class.cpp
   src/robot_info_class.cpp
