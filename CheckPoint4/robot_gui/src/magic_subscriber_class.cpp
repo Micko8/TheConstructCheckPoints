@@ -1,0 +1,1 @@
+#include "robot_gui/magic_subscriber_class.h"
