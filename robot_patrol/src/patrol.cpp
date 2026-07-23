@@ -60,29 +60,34 @@ private:
     RCLCPP_INFO(this->get_logger(), "front=%.2f right=%.2f left=%.2f", front,
                 min_right, min_left);
 
-    // Front wall: 0.35m | Side collision: 0.15m
-    if (front < 0.35 || min_right < 0.15 || min_left < 0.15) {
+    if (front < 0.35 || min_right < 0.22 || min_left < 0.22) {
 
-      // Find safest direction: max range in front 180° (50-150)
-      int max_idx = 99;
-      float max_dist = 0.0;
-
-      for (int j = 50; j <= 150; j++) {
-        if (msg->ranges[j] > max_dist &&
-            msg->ranges[j] != std::numeric_limits<float>::infinity()) {
-          max_dist = msg->ranges[j];
-          max_idx = j;
+      if (front < 0.35) {
+        // Front wall: find safest direction from max range
+        int max_idx = 99;
+        float max_dist = 0.0;
+        for (int j = 50; j <= 150; j++) {
+          if (msg->ranges[j] > max_dist &&
+              msg->ranges[j] != std::numeric_limits<float>::infinity()) {
+            max_dist = msg->ranges[j];
+            max_idx = j;
+          }
         }
-      }
+        bool is_corner = std::abs(min_right - min_left) < 0.05;
+        direction_ =
+            is_corner ? 1.0 : msg->angle_min + (max_idx * msg->angle_increment);
+        if (std::abs(direction_) < 0.5)
+          direction_ = direction_ >= 0 ? 0.5 : -0.5;
 
-      direction_ = msg->angle_min + (max_idx * msg->angle_increment);
+      } else if (min_right < 0.22) {
+        direction_ = 0.5; // too close on right → nudge left
 
-      // Ensure minimum turn of 0.5 rad
-      if (std::abs(direction_) < 0.5) {
-        direction_ = direction_ >= 0 ? 0.5 : -0.5;
+      } else if (min_left < 0.22) {
+        direction_ = -0.5; // too close on left → nudge right
       }
 
       target_yaw_ = yaw_ + direction_;
+      target_yaw_ = std::fmod(target_yaw_ + M_PI, 2 * M_PI) - M_PI;
       is_turning_ = true;
 
       RCLCPP_INFO(this->get_logger(), "Turning! direction=%.2f target_yaw=%.2f",
@@ -98,7 +103,7 @@ private:
       yaw_error = std::fmod(yaw_error + M_PI, 2 * M_PI) - M_PI;
 
       if (std::abs(yaw_error) > 0.1) {
-        msg.linear.x = 0.0;
+        msg.linear.x = 0.1;
         msg.angular.z = direction_ / 2;
       } else {
         is_turning_ = false;
