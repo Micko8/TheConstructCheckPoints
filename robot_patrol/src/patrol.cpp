@@ -11,7 +11,7 @@ class Patrol : public rclcpp::Node {
 public:
   Patrol()
       : Node("patrol_node"), direction_(0.0), is_turning_(false), yaw_(0.0),
-        target_yaw_(0.0) {
+        yaw_at_turn_start_(0.0) {
 
     subscriber_laser_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
         "/fastbot_1/scan", 10,
@@ -38,60 +38,35 @@ private:
       return;
     }
 
-    // Straight ahead only: index 99 = exactly 0 rad
+    // Only check straight ahead
     float front = msg->ranges[99];
 
-    // Very tight side zones — only for collision avoidance
-    float min_right = std::numeric_limits<float>::infinity();
-    float min_left = std::numeric_limits<float>::infinity();
+    RCLCPP_INFO(this->get_logger(), "front=%.2f", front);
 
-    for (int i = 90; i <= 98; i++) { // tight right of center
-      if (msg->ranges[i] < min_right &&
-          msg->ranges[i] != std::numeric_limits<float>::infinity())
-        min_right = msg->ranges[i];
-    }
+    if (front < 0.35) {
 
-    for (int i = 100; i <= 109; i++) { // tight left of center
-      if (msg->ranges[i] < min_left &&
-          msg->ranges[i] != std::numeric_limits<float>::infinity())
-        min_left = msg->ranges[i];
-    }
+      // Find max range index in front 180° (indices 50-150)
+      int max_idx = 99;
+      float max_dist = 0.0;
 
-    RCLCPP_INFO(this->get_logger(), "front=%.2f right=%.2f left=%.2f", front,
-                min_right, min_left);
-
-    if (front < 0.35 || min_right < 0.22 || min_left < 0.22) {
-
-      if (front < 0.35) {
-        // Front wall: find safest direction from max range
-        int max_idx = 99;
-        float max_dist = 0.0;
-        for (int j = 50; j <= 150; j++) {
-          if (msg->ranges[j] > max_dist &&
-              msg->ranges[j] != std::numeric_limits<float>::infinity()) {
-            max_dist = msg->ranges[j];
-            max_idx = j;
-          }
+      for (int j = 50; j <= 150; j++) {
+        if (msg->ranges[j] > max_dist &&
+            msg->ranges[j] != std::numeric_limits<float>::infinity()) {
+          max_dist = msg->ranges[j];
+          max_idx = j;
         }
-        bool is_corner = std::abs(min_right - min_left) < 0.05;
-        direction_ =
-            is_corner ? 1.0 : msg->angle_min + (max_idx * msg->angle_increment);
-        if (std::abs(direction_) < 0.5)
-          direction_ = direction_ >= 0 ? 0.5 : -0.5;
-
-      } else if (min_right < 0.22) {
-        direction_ = 0.5; // too close on right → nudge left
-
-      } else if (min_left < 0.22) {
-        direction_ = -0.5; // too close on left → nudge right
       }
 
-      target_yaw_ = yaw_ + direction_;
-      target_yaw_ = std::fmod(target_yaw_ + M_PI, 2 * M_PI) - M_PI;
+      // Convert to angle — naturally between -pi/2 and +pi/2
+      direction_ = msg->angle_min + (max_idx * msg->angle_increment);
+
+      // Snapshot yaw at turn start
+      yaw_at_turn_start_ = yaw_;
       is_turning_ = true;
 
-      RCLCPP_INFO(this->get_logger(), "Turning! direction=%.2f target_yaw=%.2f",
-                  direction_, target_yaw_);
+      RCLCPP_INFO(this->get_logger(),
+                  "Front wall! max_idx=%d direction=%.2f yaw_start=%.2f",
+                  max_idx, direction_, yaw_at_turn_start_);
     }
   }
 
@@ -99,12 +74,13 @@ private:
     auto msg = geometry_msgs::msg::Twist();
 
     if (is_turning_) {
-      double yaw_error = target_yaw_ - yaw_;
-      yaw_error = std::fmod(yaw_error + M_PI, 2 * M_PI) - M_PI;
+      double turned_so_far = yaw_ - yaw_at_turn_start_;
 
-      if (std::abs(yaw_error) > 0.1) {
+      if (std::abs(turned_so_far) < std::abs(direction_) - 0.1) {
         msg.linear.x = 0.1;
         msg.angular.z = direction_ / 2;
+        RCLCPP_INFO(this->get_logger(), "Turning... turned=%.2f target=%.2f",
+                    turned_so_far, direction_);
       } else {
         is_turning_ = false;
         RCLCPP_INFO(this->get_logger(), "Turn complete.");
@@ -134,7 +110,7 @@ private:
 
   double direction_;
   double yaw_;
-  double target_yaw_;
+  double yaw_at_turn_start_;
   bool is_turning_;
 };
 
