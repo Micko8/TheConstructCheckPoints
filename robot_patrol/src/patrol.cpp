@@ -14,15 +14,15 @@ public:
         yaw_at_turn_start_(0.0) {
 
     subscriber_laser_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-        "/fastbot_1/scan", 10,
+        "/scan", 10,
         std::bind(&Patrol::laserscan_callback, this, std::placeholders::_1));
 
     subscriber_odom_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/fastbot_1/odom", 10,
+        "/odom", 10,
         std::bind(&Patrol::odom_callback, this, std::placeholders::_1));
 
-    publisher_ = this->create_publisher<geometry_msgs::msg::Twist>(
-        "/fastbot_1/cmd_vel", 10);
+    publisher_ =
+        this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel_safe", 10);
 
     auto timer_period = std::chrono::milliseconds(100);
     timer_ = this->create_wall_timer(timer_period,
@@ -32,41 +32,60 @@ public:
   }
 
 private:
+  float min_in_range(const std::vector<float> &ranges, int start, int end) {
+    float min_val = std::numeric_limits<float>::infinity();
+    for (int i = start; i <= end; i++) {
+      if (ranges[i] < min_val &&
+          ranges[i] != std::numeric_limits<float>::infinity())
+        min_val = ranges[i];
+    }
+    return min_val;
+  }
+
+  int max_idx_in_range(const std::vector<float> &ranges, int start, int end) {
+    int max_idx = start;
+    float max_dist = 0.0;
+    for (int i = start; i <= end; i++) {
+      if (ranges[i] > max_dist &&
+          ranges[i] != std::numeric_limits<float>::infinity()) {
+        max_dist = ranges[i];
+        max_idx = i;
+      }
+    }
+    return max_idx;
+  }
+
   void laserscan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
 
     if (is_turning_) {
       return;
     }
 
-    // Only check straight ahead
-    float front = msg->ranges[99];
+    // zone 1: right side   indices 50-74   (-π/2 to -π/4)
+    // zone 2: center cone  indices 75-124  (-π/4 to +π/4)  ← direction_ always
+    // from here zone 3: left side    indices 125-150 (+π/4 to +π/2)
 
-    RCLCPP_INFO(this->get_logger(), "front=%.2f", front);
+    float min_z1 = min_in_range(msg->ranges, 50, 74);
+    float min_z2 = min_in_range(msg->ranges, 75, 124);
+    float min_z3 = min_in_range(msg->ranges, 125, 150);
 
-    if (front < 0.35) {
+    RCLCPP_INFO(this->get_logger(), "z1_right=%.2f z2_front=%.2f z3_left=%.2f",
+                min_z1, min_z2, min_z3);
 
-      // Find max range index in front 180° (indices 50-150)
-      int max_idx = 99;
-      float max_dist = 0.0;
+    float threshold = 0.35;
 
-      for (int j = 50; j <= 150; j++) {
-        if (msg->ranges[j] > max_dist &&
-            msg->ranges[j] != std::numeric_limits<float>::infinity()) {
-          max_dist = msg->ranges[j];
-          max_idx = j;
-        }
-      }
+    if (min_z1 < threshold || min_z2 < threshold || min_z3 < threshold) {
 
-      // Convert to angle — naturally between -pi/2 and +pi/2
+      // Always search for direction_ in zone 2 only
+      int max_idx = max_idx_in_range(msg->ranges, 75, 124);
       direction_ = msg->angle_min + (max_idx * msg->angle_increment);
 
-      // Snapshot yaw at turn start
       yaw_at_turn_start_ = yaw_;
       is_turning_ = true;
 
       RCLCPP_INFO(this->get_logger(),
-                  "Front wall! max_idx=%d direction=%.2f yaw_start=%.2f",
-                  max_idx, direction_, yaw_at_turn_start_);
+                  "Obstacle! max_idx=%d direction=%.2f yaw_start=%.2f", max_idx,
+                  direction_, yaw_at_turn_start_);
     }
   }
 
